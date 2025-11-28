@@ -1,0 +1,8 @@
+python-telegram-bot==20.5
+aiohttp
+requests
+tinydb
+PyPDF2
+duckduckgo_search
+html2text
+beautifulsoup4
