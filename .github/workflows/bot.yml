@@ -1,4 +1,5 @@
-name: Super AI Bot
+name: MusicBot
+
 on:
   push:
   workflow_dispatch:
@@ -6,15 +7,23 @@ on:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
 
-      - uses: actions/setup-python@v4
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
         with:
           python-version: "3.10"
 
-      - run: pip install -r requirements.txt
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
-      - run: python bot.py
+      - name: Install Python packages
+        run: pip install -r requirements.txt
+
+      - name: Run bot
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        run: python bot.py
