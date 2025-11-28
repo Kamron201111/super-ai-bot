@@ -6,3 +6,4 @@ PyPDF2
 duckduckgo_search
 html2text
 beautifulsoup4
+pyTelegramBotAPI
