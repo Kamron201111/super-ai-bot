@@ -1,17 +1,15 @@
-import logging
 import os
+import telebot
 import requests
-import aiohttp
 import PyPDF2
 from tinydb import TinyDB, Query
-from telegram import Update, InputFile
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    ContextTypes, filters
-)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # Token GitHub Secrets dan olinadi
+# TOKEN GitHub Secrets dan olinadi
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
+bot = telebot.TeleBot(BOT_TOKEN)
+
+# Database
 db = TinyDB("users.json")
 User = Query()
 
@@ -19,130 +17,129 @@ def add_user(uid, ref=None):
     if not db.contains(User.id == uid):
         db.insert({"id": uid, "coins": 0})
         if ref:
-            db.update({"coins": db.get(User.id == ref)["coins"] + 20}, User.id == ref)
+            old = db.get(User.id == ref)["coins"]
+            db.update({"coins": old + 20}, User.id == ref)
 
 def get_coins(uid):
     u = db.get(User.id == uid)
-    return u.get("coins", 0)
+    return u["coins"]
 
-async def ai_chat(prompt):
+# ===== AI CHAT =====
+def ai_chat(prompt):
     url = "https://api.azzouz.cloud/api/v1/chat/completions"
     data = {
         "model": "gpt-4o-mini",
         "messages": [
-            {"role": "system", "content": "Sen o'zbekcha gapiradigan kuchli AI yordamchisan."},
+            {"role": "system", "content": "O'zbekcha aqlli AI yordamchi bo'l."},
             {"role": "user", "content": prompt}
         ]
     }
     try:
-        async with aiohttp.ClientSession() as s:
-            async with s.post(url, json=data) as r:
-                j = await r.json()
-                return j["choices"][0]["message"]["content"]
+        r = requests.post(url, json=data).json()
+        return r["choices"][0]["message"]["content"]
     except:
-        return "❌ AI serveri ishlamadi."
+        return "AI xizmatida xato."
 
-async def web_search(query):
+# ===== WEB SEARCH =====
+def web_search(query):
     try:
-        data = requests.get(f"https://ddg-api.herokuapp.com/search?query={query}").json()
-        text = "\n".join([x["snippet"] for x in data["results"][:5]])
-        return await ai_chat(f"Quyidagi ma‘lumotlardan o‘zbekcha xulosa chiqar:\n{text}")
+        r = requests.get(f"https://ddg-api.herokuapp.com/search?query={query}").json()
+        text = "\n".join([x["snippet"] for x in r["results"][:5]])
+        return ai_chat(f"Quyidagi matndan o‘zbekcha xulosa yoz:\n{text}")
     except:
         return None
 
-async def process_query(q):
-    keys = ["kim", "qayer", "qachon", "qancha", "yangilik", "news", "ma'lumot"]
-    if any(k in q.lower() for k in keys):
-        r = await web_search(q)
-        if r:
-            return f"🌍 Internetdan topdim:\n\n{r}"
-    return await ai_chat(q)
+# ===== STT =====
+def stt(file_url):
+    audio = requests.get(file_url).content
+    open("v.ogg", "wb").write(audio)
 
-async def voice_to_text(url):
-    content = requests.get(url).content
-    open("voice.ogg", "wb").write(content)
     r = requests.post("https://api.groqify.cloud/stt",
-                      files={"file": ("voice.ogg", open("voice.ogg", "rb"))})
-    return r.json().get("text", "❌ Ovozni ajratib bo‘lmadi.")
+                      files={"file": ("v.ogg", open("v.ogg", "rb"))}).json()
 
-async def text_to_voice(t):
-    r = requests.post("https://api.groqify.cloud/tts", json={"text": t})
+    return r.get("text", "Ovoz tanilmadi.")
+
+# ===== TTS =====
+def tts(text):
+    r = requests.post("https://api.groqify.cloud/tts", json={"text": text})
     open("tts.mp3", "wb").write(r.content)
     return "tts.mp3"
 
-async def generate_image(prompt):
+# ===== IMAGE GEN =====
+def gen_image(prompt):
     img = requests.get("https://image.pollinations.ai/prompt/" + prompt).content
     open("ai.png", "wb").write(img)
     return "ai.png"
 
-async def pdf_reader(path):
+# ===== PDF READER =====
+def pdf_reader(path):
     try:
-        pdf = PyPDF2.PdfReader(path)
-        text = "".join([p.extract_text() for p in pdf.pages])
-        return await ai_chat(f"PDF matnidan xulosa chiqaring:\n{text}")
+        reader = PyPDF2.PdfReader(path)
+        text = "".join([pg.extract_text() for pg in reader.pages])
+        return ai_chat(f"PDF dan xulosa yoz:\n{text}")
     except:
-        return "❌ PDF o‘qishda xatolik."
+        return "PDF o‘qib bo‘lmadi."
 
-async def random_game():
-    import random
+# ===== GAME =====
+import random
+def game():
     return f"🎮 Sizga tushgan son: {random.randint(1,10)}"
 
-async def router(text, update, context):
-    if text.startswith("ref:"):
-        ref = text.replace("ref:", "").strip()
-        add_user(update.effective_user.id, ref)
-        return f"Referal qabul qilindi! Balansingiz: {get_coins(update.effective_user.id)}"
+# ===== ROUTER =====
+def process(text, uid):
+    t = text.lower()
 
-    if text.startswith("say "):
-        v = await text_to_voice(text[4:])
-        return InputFile(v)
+    if t.startswith("ref:"):
+        add_user(uid, t[4:])
+        return f"Referal qabul qilindi! Balans: {get_coins(uid)}"
 
-    if text.startswith("gen "):
-        i = await generate_image(text[4:])
-        return InputFile(i)
+    if t.startswith("say "):
+        file = tts(t[4:])
+        return ("file", file)
 
-    if text == "game":
-        return await random_game()
+    if t.startswith("gen "):
+        file = gen_image(t[4:])
+        return ("file", file)
 
-    if text.endswith(".pdf"):
-        return await pdf_reader(text)
+    if t == "game":
+        return game()
 
-    return await process_query(text)
+    if t.endswith(".pdf"):
+        return pdf_reader(t)
 
-async def handler(update, context):
-    if update.message.voice:
-        file = await context.bot.get_file(update.message.voice.file_id)
-        t = await voice_to_text(file.file_path)
-        return await update.message.reply_text(f"🎙 Ovoz matnga:\n\n{t}")
+    res = web_search(text)
+    if res:
+        return f"🌍 Internetdan topdim:\n{res}"
 
-    if update.message.text:
-        t = update.message.text
-        await update.message.reply_text("⏳ Qayta ishlayapman...")
-        result = await router(t, update, context)
+    return ai_chat(text)
 
-        if isinstance(result, InputFile):
-            return await update.message.reply_document(result)
-        return await update.message.reply_text(result)
+# ===== START =====
+@bot.message_handler(commands=['start'])
+def start(msg):
+    uid = msg.from_user.id
+    add_user(uid)
+    bot.reply_to(msg,
+        "👋 Super AI Botga xush kelibsiz!\n"
+        "🧠 AI Chat\n🌍 Web qidiruv\n🎙 Ovoz → matn\n🗣 Matn → ovoz\n"
+        "🖼 Rasm generatsiya\n📚 PDF o'qish\n🎮 Mini o‘yin\n👤 Referal\n")
 
-async def start(update, context):
-    u = update.effective_user
-    add_user(u.id)
-    ref = f"https://t.me/{context.bot.username}?start={u.id}"
+# ===== VOICE =====
+@bot.message_handler(content_types=['voice'])
+def voice(msg):
+    file = bot.get_file(msg.voice.file_id)
+    url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
+    txt = stt(url)
+    bot.reply_to(msg, f"🎙 Ovoz matnga:\n{txt}")
 
-    await update.message.reply_text(
-        "👋 SUPER MEGA BOTGA XUSH KELDINGIZ!\n"
-        "🧠 AI Chat\n🌍 Internet qidiruv\n🎙 Ovoz → Matn\n🗣 Matn → Ovoz\n"
-        "🖼 Surat generatsiya\n📚 PDF o‘qish\n🎮 Mini o‘yin\n👤 Referal\n\n"
-        f"Referal: {ref}"
-    )
+# ===== TEXT =====
+@bot.message_handler(func=lambda m: True)
+def txt(msg):
+    res = process(msg.text, msg.from_user.id)
 
-async def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.ALL, handler))
-    await app.run_polling()
+    if isinstance(res, tuple):
+        if res[0] == "file":
+            bot.send_document(msg.chat.id, open(res[1], "rb"))
+    else:
+        bot.reply_to(msg, res)
 
-if __name__ == "__main__":
-    import asyncio
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+bot.infinity_polling()
